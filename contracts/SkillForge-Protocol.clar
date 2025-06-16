@@ -128,6 +128,14 @@
     (- amount (calculate-platform-fee amount))
 )
 
+(define-private (validate-stake-amount (stake-amount uint))
+    (and (>= stake-amount u0) (<= stake-amount u100000000000)) ;; Max 100k STX stake
+)
+
+(define-private (validate-certificate-hash (certificate-hash (string-utf8 64)))
+    (and (>= (len certificate-hash) u32) (<= (len certificate-hash) u64))
+)
+
 ;; Public functions
 
 ;; Create a new course
@@ -152,6 +160,7 @@
         (asserts! (validate-difficulty difficulty) ERR-INVALID-DIFFICULTY)
         (asserts! (and (>= price MIN-PRICE) (<= price MAX-PRICE)) ERR-INVALID-PRICE)
         (asserts! (and (>= duration MIN-DURATION) (<= duration MAX-DURATION)) ERR-INVALID-DURATION)
+        (asserts! (validate-stake-amount stake-amount) ERR-INVALID-PRICE)
         
         ;; Create course
         (map-set courses course-id {
@@ -256,24 +265,30 @@
             (enrollment (unwrap! (map-get? enrollments enrollment-id) ERR-NOT-ENROLLED))
             (course (unwrap! (map-get? courses course-id) ERR-COURSE-NOT-FOUND))
             (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+            (validated-course-id (get course-id enrollment))
+            (validated-hash certificate-hash)
         )
+        ;; Additional validations
+        (asserts! (validate-certificate-hash certificate-hash) ERR-INVALID-DESCRIPTION)
+        (asserts! (is-eq course-id validated-course-id) ERR-COURSE-NOT-FOUND)
+        
         ;; Validate completion and progress
         (asserts! (get is-completed enrollment) ERR-COURSE-NOT-COMPLETED)
         (asserts! (>= (get progress enrollment) COMPLETION-THRESHOLD) ERR-COURSE-NOT-COMPLETED)
         (asserts! (not (get is-certified enrollment)) ERR-ALREADY-CERTIFIED)
         
         ;; Issue certification
-        (map-set certifications { student: tx-sender, course-id: course-id } {
+        (map-set certifications { student: tx-sender, course-id: validated-course-id } {
             certified-at: current-time,
             final-score: (get progress enrollment),
-            certificate-hash: certificate-hash
+            certificate-hash: validated-hash
         })
         
         ;; Update enrollment
         (map-set enrollments enrollment-id (merge enrollment { is-certified: true }))
         
         ;; Update course stats
-        (map-set courses course-id (merge course { total-certified: (+ (get total-certified course) u1) }))
+        (map-set courses validated-course-id (merge course { total-certified: (+ (get total-certified course) u1) }))
         
         ;; Return stake to student (simulated)
         (ok true)
